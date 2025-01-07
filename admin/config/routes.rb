@@ -20,6 +20,12 @@ Spree::Core::Engine.add_routes do
     resource :profile, controller: 'profile', only: %i[edit update]
 
     # store settings
+    resource :store, only: [:edit, :update], controller: 'stores' do
+      member do
+        get :edit_emails
+      end
+    end
+
     resources :payment_methods, except: :show
     resources :shipping_methods, except: :show
     resources :shipping_categories, except: :show
@@ -44,7 +50,29 @@ Spree::Core::Engine.add_routes do
     resources :webhooks_subscribers
 
     # products
-    resources :products
+    resources :products do
+      collection do
+        get :select_options, defaults: { format: :json }
+        post :search
+        get :bulk_modal
+        put :bulk_status_update
+        put :bulk_add_to_taxons
+        put :bulk_remove_from_taxons
+        put :bulk_add_tags
+        put :bulk_remove_tags
+      end
+
+      member do
+        post :clone
+      end
+
+      resources :variants, only: [:edit, :update, :destroy]
+      resources :digitals, only: [:index, :create, :destroy]
+    end
+
+    # stock
+    resources :stock_items, only: [:index, :update, :destroy]
+    resources :stock_transfers, except: [:edit, :update]
 
     # taxonomies and taxons
     resources :taxonomies do
@@ -60,6 +88,10 @@ Spree::Core::Engine.add_routes do
     end
 
     get '/taxons/select_options' => 'taxons#select_options', as: :taxons_select_options, defaults: { format: :json }
+
+    # variants
+    post 'variants/search'
+    get 'variants/search', defaults: { format: :json }
 
     # errors
     get '/forbidden', to: 'errors#forbidden', as: :forbidden

@@ -20,7 +20,6 @@ module Spree
     include Spree::Order::Emails
     include Spree::Order::Webhooks
     include Spree::Core::NumberGenerator.new(prefix: 'R')
-    include Spree::Core::TokenGenerator
 
     include Spree::NumberIdentifier
     include Spree::NumberAsParam
@@ -33,6 +32,8 @@ module Spree
     if defined?(Spree::VendorConcern)
       include Spree::VendorConcern
     end
+
+    has_secure_token :token, length: 35
 
     MEMOIZED_METHODS = %w(tax_zone)
 
@@ -78,6 +79,7 @@ module Spree
       completed_at email number state payment_state shipment_state
       total item_total considered_risky channel
     ]
+    self.whitelisted_ransackable_scopes = %w[refunded partially_refunded]
 
     attr_reader :coupon_code
     attr_accessor :temporary_address, :temporary_credit_card
@@ -87,7 +89,7 @@ module Spree
     acts_as_taggable_on :tags
     acts_as_taggable_tenant :store_id
 
-    belongs_to :user, class_name: "::#{Spree.user_class}", optional: true
+    belongs_to :user, class_name: "::#{Spree.user_class}", optional: true, autosave: true
     belongs_to :created_by, class_name: "::#{Spree.admin_user_class}", optional: true
     belongs_to :approver, class_name: "::#{Spree.admin_user_class}", optional: true
     belongs_to :canceler, class_name: "::#{Spree.admin_user_class}", optional: true
@@ -112,6 +114,7 @@ module Spree
       has_many :adjustments, -> { order(:created_at) }, as: :adjustable, class_name: 'Spree::Adjustment'
     end
     has_many :reimbursements, inverse_of: :order, class_name: 'Spree::Reimbursement'
+    has_many :customer_returns, class_name: 'Spree::CustomerReturn', through: :return_authorizations
     has_many :line_item_adjustments, through: :line_items, source: :adjustments
     has_many :inventory_units, inverse_of: :order, class_name: 'Spree::InventoryUnit'
     has_many :return_items, through: :inventory_units, class_name: 'Spree::ReturnItem'
@@ -145,9 +148,9 @@ module Spree
     before_validation :ensure_currency_presence
 
     before_validation :clone_billing_address, if: :use_billing?
-    attr_accessor :use_billing
+    before_validation :clone_shipping_address, if: :use_shipping?
+    attr_accessor :use_billing, :use_shipping
 
-    before_create :create_token
     before_create :link_by_email
     before_update :ensure_updated_shipments, :homogenize_line_item_currencies, if: :currency_changed?
 
@@ -181,7 +184,18 @@ module Spree
     scope :completed_between, ->(start_date, end_date) { where(completed_at: start_date..end_date) }
     scope :complete, -> { where.not(completed_at: nil) }
     scope :incomplete, -> { where(completed_at: nil) }
-    scope :not_canceled, -> { where.not(state: 'canceled') }
+    scope :canceled, -> { where(state: %w[canceled partially_canceled]) }
+    scope :not_canceled, -> { where.not(state: %w[canceled partially_canceled]) }
+    scope :ready_to_ship, -> { where(shipment_state: %w[ready pending]) }
+    scope :partially_shipped, -> { where(shipment_state: %w[partial]) }
+    scope :not_shipped, -> { where(shipment_state: %w[ready pending partial]) }
+    scope :shipped, -> { where(shipment_state: %w[shipped]) }
+    scope :refunded, lambda {
+      joins(:refunds).group(:id).having("sum(#{Spree::Refund.table_name}.amount) = #{Spree::Order.table_name}.total")
+    }
+    scope :partially_refunded, lambda {
+                                joins(:refunds).group(:id).having("sum(#{Spree::Refund.table_name}.amount) < #{Spree::Order.table_name}.total")
+                              }
     scope :with_deleted_bill_address, -> { joins(:bill_address).where.not(Address.table_name => { deleted_at: nil }) }
     scope :with_deleted_ship_address, -> { joins(:ship_address).where.not(Address.table_name => { deleted_at: nil }) }
 
@@ -279,7 +293,7 @@ module Spree
     def allow_cancel?
       return false if !completed? || canceled?
 
-      shipment_state.nil? || %w{ready backorder pending}.include?(shipment_state)
+      shipment_state.nil? || %w{ready backorder pending canceled}.include?(shipment_state)
     end
 
     def all_inventory_units_returned?
@@ -290,9 +304,11 @@ module Spree
     def associate_user!(user, override_email = true)
       self.user           = user
       self.email          = user.email if override_email
-      self.created_by   ||= user
-      self.bill_address ||= user.bill_address.try(:clone)
-      self.ship_address ||= user.ship_address.try(:clone)
+      # we need to check if user is of admin user class to avoid mismatch type error
+      # in a scenario where we have separate classes for admin and regular users
+      self.created_by   ||= user if user.is_a?(Spree.admin_user_class)
+      self.bill_address ||= user.bill_address
+      self.ship_address ||= user.ship_address
 
       changes = slice(:user_id, :email, :created_by_id, :bill_address_id, :ship_address_id)
 
@@ -584,13 +600,15 @@ module Spree
       !payments.risky.empty?
     end
 
-    def canceled_by(user)
+    def canceled_by(user, canceled_at = nil)
+      canceled_at ||= Time.current
+
       transaction do
-        cancel!
         update_columns(
           canceler_id: user.id,
-          canceled_at: Time.current
+          canceled_at: canceled_at
         )
+        cancel!
       end
     end
 
@@ -717,8 +735,9 @@ module Spree
     end
 
     # Determine if email is required (we don't want validation errors before we hit the checkout)
+    # we need to add delivery to the list for quick checkouts
     def require_email
-      true unless new_record? || ['cart', 'address'].include?(state)
+      true unless new_record? || ['cart', 'address', 'delivery'].include?(state)
     end
 
     def ensure_line_items_present
@@ -758,12 +777,12 @@ module Spree
       use_billing.in?([true, 'true', '1'])
     end
 
-    def ensure_currency_presence
-      self.currency ||= store.default_currency
+    def use_shipping?
+      use_shipping.in?([true, 'true', '1'])
     end
 
-    def create_token
-      self.token ||= generate_token
+    def ensure_currency_presence
+      self.currency ||= store.default_currency
     end
 
     def collect_payment_methods(store = nil)

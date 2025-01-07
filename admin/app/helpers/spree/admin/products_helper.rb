@@ -32,8 +32,8 @@ module Spree
       def media_form_assets(variant)
         if variant&.persisted?
           variant.images
-        elsif session[:uploaded_asset_ids].present?
-          Spree::Image.accessible_by(current_ability, :manage).where(id: session[:uploaded_asset_ids].split(','))
+        elsif session_uploaded_assets.any?
+          Spree::Image.accessible_by(current_ability, :manage).where(id: session_uploaded_assets)
         end
       end
 
@@ -95,7 +95,7 @@ module Spree
         when 'archived'
           Spree.t('admin.products.archived')
         else
-          'All statuses'
+          Spree.t('admin.products.all_statuses')
         end
       end
 
@@ -105,8 +105,20 @@ module Spree
         elsif params[:q][:out_of_stock_items] == '1'
           Spree.t('admin.products.out_of_stock')
         else
-          'Any stock'
+          Spree.t('admin.products.any_stock')
         end
+      end
+
+      def show_product_status_help_bubble?
+        false
+      end
+
+      def variant_form_stock_location_options
+        options_for_select(available_stock_locations_list)
+      end
+
+      def product_list_filters_search_form_path
+        [:admin, @search]
       end
     end
   end

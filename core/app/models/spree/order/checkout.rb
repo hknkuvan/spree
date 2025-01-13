@@ -88,6 +88,7 @@ module Spree
                   order.create_digital_links if order.some_digital?
                 end
 
+                after_transition to: :complete, do: :create_user_record
                 after_transition to: :complete, do: :persist_user_credit_card
                 before_transition to: :payment, do: :set_shipments_cost
                 before_transition to: :payment, do: :create_tax_charge!
@@ -268,6 +269,13 @@ module Spree
               # to avoid triggering validations on shipping address
               self.ship_address = user.ship_address if !ship_address_id && user.ship_address&.valid? && checkout_steps.include?('delivery')
             end
+          end
+
+          def create_user_record
+            return if user.present?
+            return unless signup_for_an_account?
+
+            Spree::Orders::CreateUserAccount.call(order: self, accepts_email_marketing: accept_marketing?)
           end
 
           def persist_user_credit_card

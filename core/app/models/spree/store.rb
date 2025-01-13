@@ -37,6 +37,7 @@ module Spree
 
     acts_as_paranoid
 
+    has_many :checkouts, -> { incomplete }, class_name: 'Spree::Order', inverse_of: :store
     has_many :orders, class_name: 'Spree::Order'
     has_many :line_items, through: :orders, class_name: 'Spree::LineItem'
     has_many :shipments, through: :orders, class_name: 'Spree::Shipment'
@@ -130,7 +131,7 @@ module Spree
     delegate :iso, to: :default_country, prefix: true, allow_nil: true
 
     def self.current(url = nil)
-      Spree::Dependencies.current_store_finder.constantize.new(url: url).execute
+      Spree::Dependencies.current_store_finder.constantize.new(url: url).execute || Spree::Current.store
     end
 
     # FIXME: we need to drop `or_initialize` in v5
@@ -197,6 +198,11 @@ module Spree
                          end
     end
 
+    def url_or_custom_domain
+      # Overwrite this if you have a custom domain
+      url
+    end
+
     def countries_available_for_checkout
       @countries_available_for_checkout ||= Rails.cache.fetch(countries_available_for_checkout_cache_key) do
         checkout_zone.try(:country_list) || Spree::Country.all
@@ -238,6 +244,10 @@ module Spree
 
     def can_be_deleted?
       self.class.where.not(id: id).any?
+    end
+
+    def metric_unit_system?
+      unit_system == 'metric'
     end
 
     private

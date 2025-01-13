@@ -2,7 +2,7 @@ require 'spec_helper'
 
 describe Spree::Payment, type: :model do
   let(:store) { Spree::Store.default }
-  let(:order) { store.orders.create }
+  let(:order) { create(:order, store: store) }
   let(:refund_reason) { create(:refund_reason) }
 
   let(:gateway) do
@@ -746,6 +746,27 @@ describe Spree::Payment, type: :model do
       payment.source_attributes = params[:source_attributes]
       expect { payment.dup }.not_to change { payment.source }
     end
+
+    context 'existing card' do
+      let!(:credit_card) { create(:credit_card, number: '4111111111111112', user: order.user, payment_method: gateway, gateway_customer_profile_id: 'BGS-1234567890') }
+
+      let(:params) do
+        {
+          amount: 100,
+          order: order,
+          payment_method: gateway,
+          source_attributes: {
+            id: credit_card.id
+          }
+        }
+      end
+
+      it 'assigns the existing card' do
+        payment = Spree::Payment.new(params)
+        expect(payment.source).to eq(credit_card)
+        expect(payment.source.gateway_customer_profile_id).to eq('BGS-1234567890')
+      end
+    end
   end
 
   describe '#currency' do
@@ -981,12 +1002,12 @@ describe Spree::Payment, type: :model do
   context 'state changes' do
     it 'are logged to the database' do
       expect(payment.state_changes).to be_empty
-      expect(payment.process!).to be true
+      expect(payment.process!).to be_a(Spree::PaymentCaptureEvent)
       expect(payment.state_changes.count).to eq(2)
       changes = payment.state_changes.map { |change| { change.previous_state => change.next_state } }
       expect(changes).to match_array([
                                        { 'checkout' => 'processing' },
-                                       { 'processing' => 'pending' }
+                                       { 'processing' => 'completed' }
                                      ])
     end
   end

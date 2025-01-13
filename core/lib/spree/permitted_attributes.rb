@@ -48,8 +48,8 @@ module Spree
     ]
 
     @@checkout_attributes = [
-      :coupon_code, :email, :shipping_method_id, :special_instructions, :use_billing,
-      :user_id, :bill_address_id, :ship_address_id
+      :coupon_code, :email, :shipping_method_id, :special_instructions, :use_billing, :use_shipping,
+      :user_id, :bill_address_id, :ship_address_id, :accept_marketing, :signup_for_an_account
     ]
 
     @@classification_attributes = [
@@ -113,7 +113,7 @@ module Spree
 
     # month / year may be provided by some sources, or others may elect to use one field
     @@source_attributes = [
-      :number, :month, :year, :expiry, :verification_value,
+      :id, :number, :month, :year, :expiry, :verification_value,
       :first_name, :last_name, :cc_type, :gateway_customer_profile_id,
       :gateway_payment_profile_id, :last_digits, :name, :encrypted_data
     ]
